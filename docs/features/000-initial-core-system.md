@@ -49,3 +49,28 @@ Tradeoffs:
 - Authentication is development-header based for now; real sessions are a planned backlog feature.
 - The payment provider is deterministic and mocked so state transitions are easy to inspect.
 - API integration tests and Playwright E2E tests are intentionally left for later backlog work after the core flow is stable.
+
+## Verified against this snapshot
+
+The build journal above is the author's record. Checked against the code:
+
+| Journal claim | What the code shows |
+|---|---|
+| Npm workspaces with three apps and two packages | Yes: root `package.json` `workspaces: ["packages/*", "apps/*"]`; package names `@billing/api`, `@billing/web`, `@billing/worker`, `@billing/db`, `@billing/domain`. |
+| Prisma schema for the listed entities | Yes, 21 models (`packages/db/prisma/schema.prisma`). |
+| API modules for identity, catalog, billing, payments, platform | Yes, `apps/api/src/modules/*.routes.ts`, mounted in `app.ts:52-56`. |
+| Worker for invoices, payments, outbox, heartbeat | Yes, `apps/worker/src/index.ts`, `jobs.ts`, `outbox-processor.ts`. The outbox processor only logs events. |
+| React screens for dashboard, customers, subscriptions, catalog, portal, audit | Yes, `apps/web/src/App.tsx:19` and components from `:211`. |
+| Domain tests for money, invoices, permissions, transitions, idempotency | Yes, one test each in `packages/domain/src/domain.test.ts`. |
+
+Design considerations versus code:
+
+- *"Tenant isolation must be enforced in backend queries."* Done in every billing, catalog and platform query, with one exception: the mock webhook updates a payment by ID without `organizationId` (`apps/api/src/modules/payments.routes.ts:51-59`).
+- *"Subscription and invoice state transitions should be explicit."* Explicit enums exist and `packages/domain/src/billing-state.ts` defines the transitions, but no route or job calls them.
+- *"Webhook/idempotency paths should be shaped early."* Shaped: `WebhookEvent` deduplicates by `providerEventId`, and `runIdempotent` stores responses per key. Neither is safe under concurrent requests yet (see `docs/system-design-current.md`).
+
+## Exercise
+
+**Goal:** take the journal's "most important lesson" (creating a subscription touches authorization, tenant scoping, writes, audit, outbox, jobs and the frontend refresh) and list the file and line for each of those seven steps.
+
+**Check:** your list includes `apps/api/src/shared/auth.ts:55-62`, `billing.routes.ts:137-145`, `:150-162`, `:164-171`, `:173-177`, `:182-185`, and the `await refresh()` at the end of `createSubscription` in `apps/web/src/App.tsx` (line 105).

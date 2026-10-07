@@ -127,3 +127,24 @@ A junior developer should learn how to:
 - Trace a business workflow across API, domain logic, database writes, worker jobs, and UI screens.
 - Spot where transactional safety, idempotency, authorization, and auditability matter.
 - Understand why production systems keep business rules out of random route handlers.
+
+## Plan versus code (2026-10 docs pass)
+
+The plan was written before implementation. Checked against this snapshot:
+
+| Plan | Code |
+|---|---|
+| Create Subscription, steps 1-6 | All six happen in `apps/api/src/modules/billing.routes.ts:125-193`, with an optional idempotency key on top. |
+| Generate Invoice: "worker loads due subscriptions" | No. The worker invoices one subscription per queued job (`apps/worker/src/jobs.ts:4-105`); nothing scans for due subscriptions or renews periods. |
+| Invoice "created as `draft`, finalized, then queued for payment" | Created directly as `open` with `finalizedAt` set; payment is queued only when a user clicks "queue payment". |
+| "Payment simulation ... emits a webhook-like event" | The worker writes the payment result directly (`jobs.ts:107-166`). The mock webhook endpoint exists separately (`payments.routes.ts:27-93`) and the worker does not call it. |
+| Webhook: "event is stored before business effects" | Yes: upsert by `providerEventId`, then a transaction, then `processedAt` (`payments.routes.ts:33-74`). A duplicate of a processed event returns `duplicate: true`; two concurrent first deliveries can both apply. |
+| "DTOs are shaped for API clients rather than exposing raw database records" | Mostly not: routes return Prisma rows with `include`s (for example `GET /api/billing/customers` returns customers with subscriptions and invoices). `/api/identity/me` is the one shaped response. |
+| "Pagination, filtering, and sorting where list endpoints can grow" | Fixed `take` limits (8, 25, 50, 100) and two filters (customer search, invoice status); no paging. |
+| Testing strategy: domain, API, frontend, worker | Domain tests only. |
+
+## Exercise
+
+**Goal:** implement the planned "worker loads due subscriptions": a repeatable BullMQ job that finds `active` subscriptions whose `currentPeriodEnd` has passed, advances the period and enqueues `generate-invoice`.
+
+**Check:** after setting a subscription's `currentPeriodEnd` to yesterday in Prisma Studio, within one job interval its period moves forward and exactly one new invoice appears; running the job a second time creates no further invoice.
